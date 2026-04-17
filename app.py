@@ -86,9 +86,9 @@ def get_sheets():
     try:
         records = sh.worksheet("서명기록")
     except gspread.WorksheetNotFound:
-        records = sh.add_worksheet("서명기록", rows=1000, cols=7)
+        records = sh.add_worksheet("서명기록", rows=1000, cols=8)
         records.append_row(
-            ["training_id", "연수명", "부서", "이름", "제출시각", "서명파일", "서명URL"]
+            ["training_id", "연수명", "부서", "이름", "제출시각", "서명파일", "서명URL", "서명FileID"]
         )
 
     # 교직원명부 (신규)
@@ -149,14 +149,19 @@ def load_teachers_ordered() -> list[tuple[str, str]]:
 
 @st.cache_data(ttl=30)
 def load_signed_names_for_training(training_id: str) -> set:
-    """해당 연수에 이미 서명한 (부서, 이름) 집합."""
+    """해당 연수에 이미 서명한 (부서, 이름) 집합. 구 버전 '소속' 컬럼도 호환."""
     _, records_ws, _ = get_sheets()
     all_records = records_ws.get_all_records()
-    return {
-        (str(r["부서"]), str(r["이름"]))
-        for r in all_records
-        if str(r["training_id"]) == str(training_id)
-    }
+    result = set()
+    for r in all_records:
+        if str(r.get("training_id", "")) != str(training_id):
+            continue
+        # '부서' 또는 '소속' 둘 다 지원 (레거시 데이터 호환)
+        dept = str(r.get("부서") or r.get("소속") or "").strip()
+        name = str(r.get("이름", "")).strip()
+        if dept and name:
+            result.add((dept, name))
+    return result
 
 
 # ───────────────────────────────────────────────────────
@@ -204,7 +209,7 @@ def save_signature(training_id, training_name, dept, name, png_bytes):
 
     _, records_ws, _ = get_sheets()
     records_ws.append_row(
-        [training_id, training_name, dept, name, timestamp, filename, view_url],
+        [training_id, training_name, dept, name, timestamp, filename, view_url, file_id],
         value_input_option="USER_ENTERED",
     )
     return view_url
@@ -504,7 +509,10 @@ def render_admin_page():
                     all_teachers = {
                         (d, n) for d, names in teachers_by_dept.items() for n in names
                     }
-                    signed = {(r["부서"], r["이름"]) for r in filtered}
+                    signed = {
+                        (str(r.get("부서") or r.get("소속") or ""), str(r.get("이름", "")))
+                        for r in filtered
+                    }
                     missing = sorted(all_teachers - signed)
                     if missing:
                         with st.expander(f"❗ 미서명자 ({len(missing)}명)"):
@@ -586,21 +594,36 @@ def render_admin_page():
                             try:
                                 # 서명 이미지 다운로드: {(부서, 이름): png_bytes}
                                 signatures = {}
+                                failed = []
                                 progress = st.progress(0)
                                 for i, r in enumerate(training_records):
-                                    file_id = extract_file_id_from_url(
-                                        str(r.get("서명URL", ""))
-                                    )
-                                    if file_id:
+                                    dept = str(r.get("부서") or r.get("소속") or "").strip()
+                                    name = str(r.get("이름", "")).strip()
+
+                                    # file_id 우선, 없으면 URL에서 추출 (레거시 호환)
+                                    file_id = str(r.get("서명FileID") or "").strip()
+                                    if not file_id:
+                                        file_id = extract_file_id_from_url(
+                                            str(r.get("서명URL", ""))
+                                        ) or ""
+
+                                    if not dept or not name:
+                                        failed.append(f"빈 이름/부서 행 (row {i+2})")
+                                    elif not file_id:
+                                        failed.append(f"{dept} {name}: 파일 ID 없음")
+                                    else:
                                         try:
                                             png = download_signature_from_drive(file_id)
-                                            signatures[(str(r["부서"]), str(r["이름"]))] = png
+                                            signatures[(dept, name)] = png
                                         except Exception as ex:
-                                            st.warning(
-                                                f"{r['부서']} {r['이름']}: 서명 이미지 다운로드 실패 ({ex})"
-                                            )
+                                            failed.append(f"{dept} {name}: 다운로드 실패 - {ex}")
                                     progress.progress((i + 1) / max(len(training_records), 1))
                                 progress.empty()
+
+                                if failed:
+                                    with st.expander(f"⚠️ 서명 이미지 {len(failed)}건 처리 실패"):
+                                        for msg in failed:
+                                            st.text(msg)
 
                                 # PDF 생성
                                 pdf_bytes = generate_attendance_pdf(
@@ -611,14 +634,33 @@ def render_admin_page():
                                     school_year=datetime.datetime.now().strftime("%Y학년도"),
                                 )
 
+                                # 매칭 검증: 서명은 있는데 명부에 없는 경우 체크
+                                teacher_set = set(teachers)
+                                unmatched = [
+                                    (d, n) for (d, n) in signatures.keys()
+                                    if (d, n) not in teacher_set
+                                ]
+                                if unmatched:
+                                    with st.expander(
+                                        f"⚠️ 서명은 있지만 교직원 명부와 매칭 안 됨 ({len(unmatched)}명)"
+                                    ):
+                                        st.caption(
+                                            "이 사람들의 서명은 PDF에 **표시되지 않습니다**. "
+                                            "교직원 명부의 부서/이름과 정확히 일치해야 PDF에 반영됩니다."
+                                        )
+                                        for d, n in unmatched:
+                                            st.text(f"  서명기록: [{d}] {n}")
+
                                 # 다운로드 버튼 (세션 저장)
                                 st.session_state["roster_pdf"] = pdf_bytes
                                 st.session_state["roster_filename"] = (
                                     f"연수확인명부_{selected_training['연수명']}.pdf"
                                 )
+                                matched = len(signatures) - len(unmatched)
                                 st.success(
                                     f"✅ PDF 생성 완료! "
-                                    f"({len(signatures)}명 서명 포함, 총 {total_count}명)"
+                                    f"PDF에 포함된 서명: **{matched}명** "
+                                    f"(다운로드한 서명: {len(signatures)}명, 교직원: {total_count}명)"
                                 )
                             except Exception as e:
                                 st.error(f"PDF 생성 실패: {e}")
