@@ -649,6 +649,14 @@ def render_admin_page():
                                     school_year=datetime.datetime.now().strftime("%Y학년도"),
                                 )
 
+                                # 타입 검증
+                                if not isinstance(pdf_bytes, (bytes, bytearray)):
+                                    raise TypeError(
+                                        f"PDF 생성 결과가 bytes가 아닙니다: {type(pdf_bytes)}"
+                                    )
+                                if len(pdf_bytes) == 0:
+                                    raise ValueError("PDF 생성 결과가 비어있습니다.")
+
                                 # 매칭 검증: 서명은 있는데 명부에 없는 경우 체크
                                 teacher_set = set(teachers)
                                 unmatched = [
@@ -684,10 +692,11 @@ def render_admin_page():
                                     st.code(traceback.format_exc())
 
                     # 생성된 PDF 다운로드
-                    if "roster_pdf" in st.session_state:
+                    pdf_data = st.session_state.get("roster_pdf")
+                    if isinstance(pdf_data, (bytes, bytearray)) and len(pdf_data) > 0:
                         st.download_button(
                             "⬇️ PDF 다운로드",
-                            data=st.session_state["roster_pdf"],
+                            data=bytes(pdf_data),
                             file_name=st.session_state.get(
                                 "roster_filename", "연수확인명부.pdf"
                             ),
