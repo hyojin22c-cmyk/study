@@ -64,21 +64,17 @@ def _register_korean_fonts():
 # ───────────────────────────────────────────────────────
 def _draw_signature(c, png_bytes, x, y, w, h):
     """지정된 영역(x, y, w, h) 안에 서명 이미지를 비율 유지해서 그림."""
-    try:
-        img = Image.open(io.BytesIO(png_bytes))
-        iw, ih = img.size
-        scale = min(w / iw, h / ih) * 0.9  # 90% 크기로 (약간 여백)
-        draw_w, draw_h = iw * scale, ih * scale
-        draw_x = x + (w - draw_w) / 2
-        draw_y = y + (h - draw_h) / 2
+    from reportlab.lib.utils import ImageReader
 
-        # reportlab은 PIL Image를 ImageReader로 감싸야 함
-        from reportlab.lib.utils import ImageReader
-        img_reader = ImageReader(io.BytesIO(png_bytes))
-        c.drawImage(img_reader, draw_x, draw_y, draw_w, draw_h, mask="auto")
-    except Exception as e:
-        # 서명 이미지 로드 실패 시 빈 칸으로 처리
-        print(f"서명 이미지 그리기 실패: {e}")
+    img = Image.open(io.BytesIO(png_bytes))
+    iw, ih = img.size
+    scale = min(w / iw, h / ih) * 0.9  # 90% 크기로 (약간 여백)
+    draw_w, draw_h = iw * scale, ih * scale
+    draw_x = x + (w - draw_w) / 2
+    draw_y = y + (h - draw_h) / 2
+
+    img_reader = ImageReader(io.BytesIO(png_bytes))
+    c.drawImage(img_reader, draw_x, draw_y, draw_w, draw_h, mask="auto")
 
 
 # ───────────────────────────────────────────────────────
