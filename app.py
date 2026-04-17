@@ -21,6 +21,8 @@ import datetime
 import uuid
 import numpy as np
 
+from pdf_roster import generate_attendance_pdf
+
 # ───────────────────────────────────────────────────────
 # 설정
 # ───────────────────────────────────────────────────────
@@ -93,10 +95,10 @@ def get_sheets():
     try:
         teachers = sh.worksheet("교직원명부")
     except gspread.WorksheetNotFound:
-        teachers = sh.add_worksheet("교직원명부", rows=200, cols=2)
-        teachers.append_row(["부서", "이름"])
-        teachers.append_row(["교무부", "(예시) 김교무"])
-        teachers.append_row(["연구부", "(예시) 이연구"])
+        teachers = sh.add_worksheet("교직원명부", rows=200, cols=3)
+        teachers.append_row(["연번", "부서", "이름"])
+        teachers.append_row(["1", "교무부", "(예시) 김교무"])
+        teachers.append_row(["2", "연구부", "(예시) 이연구"])
 
     return trainings, records, teachers
 
@@ -120,6 +122,29 @@ def load_teachers():
         if dept and name:
             by_dept.setdefault(dept, []).append(name)
     return by_dept
+
+
+@st.cache_data(ttl=60)
+def load_teachers_ordered() -> list[tuple[str, str]]:
+    """교직원 명부를 연번 순서대로 [(부서, 이름), ...] 반환. 결재 명부 PDF용."""
+    _, _, teachers_ws = get_sheets()
+    rows = teachers_ws.get_all_records()
+    ordered = []
+    for r in rows:
+        dept = str(r.get("부서", "")).strip()
+        name = str(r.get("이름", "")).strip()
+        if dept and name:
+            # 연번이 있으면 int 변환해서 정렬, 없으면 등록 순서 유지
+            try:
+                num = int(r.get("연번", 0))
+            except (ValueError, TypeError):
+                num = 0
+            ordered.append((num, dept, name))
+
+    # 연번이 있으면 그 순서로, 없으면 등록 순서
+    if any(n > 0 for n, _, _ in ordered):
+        ordered.sort(key=lambda x: x[0] if x[0] > 0 else 9999)
+    return [(d, n) for _, d, n in ordered]
 
 
 @st.cache_data(ttl=30)
@@ -147,6 +172,27 @@ def upload_signature_to_drive(png_bytes: bytes, filename: str) -> tuple[str, str
         supportsAllDrives=True,
     ).execute()
     return file["id"], file["webViewLink"]
+
+
+def download_signature_from_drive(file_id: str) -> bytes:
+    """Drive 파일 ID로 PNG bytes를 다운로드."""
+    from googleapiclient.http import MediaIoBaseDownload
+    service = get_drive_service()
+    request = service.files().get_media(fileId=file_id, supportsAllDrives=True)
+    buf = io.BytesIO()
+    downloader = MediaIoBaseDownload(buf, request)
+    done = False
+    while not done:
+        _, done = downloader.next_chunk()
+    return buf.getvalue()
+
+
+def extract_file_id_from_url(url: str) -> str | None:
+    """Drive URL에서 파일 ID 추출."""
+    # https://drive.google.com/file/d/{ID}/view?usp=drivesdk
+    import re
+    match = re.search(r"/d/([a-zA-Z0-9_-]+)", url)
+    return match.group(1) if match else None
 
 
 def save_signature(training_id, training_name, dept, name, png_bytes):
@@ -316,8 +362,8 @@ def render_admin_page():
                 st.error("비밀번호가 틀렸습니다.")
         return
 
-    tab1, tab2, tab3, tab4, tab5 = st.tabs(
-        ["📋 연수 관리", "👥 교직원 명부", "📊 서명 기록", "🔗 공유 링크", "🔍 진단"]
+    tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
+        ["📋 연수 관리", "👥 교직원 명부", "📊 서명 기록", "📄 결재 명부", "🔗 공유 링크", "🔍 진단"]
     )
 
     # 탭 1: 연수 관리
@@ -405,16 +451,25 @@ def render_admin_page():
         st.divider()
         st.subheader("➕ 교직원 1명 추가")
         with st.form("add_teacher", clear_on_submit=True):
-            c1, c2 = st.columns(2)
-            add_dept = c1.text_input("부서")
-            add_name = c2.text_input("이름")
+            c1, c2, c3 = st.columns([1, 2, 2])
+            add_num = c1.text_input("연번", placeholder="자동")
+            add_dept = c2.text_input("부서")
+            add_name = c3.text_input("이름")
             if st.form_submit_button("추가"):
                 if add_dept and add_name:
                     try:
                         _, _, teachers_ws = get_sheets()
-                        teachers_ws.append_row([add_dept.strip(), add_name.strip()])
+                        # 연번 비어있으면 현재 최대값 + 1
+                        if not add_num.strip():
+                            existing = teachers_ws.get_all_records()
+                            max_num = max(
+                                [int(r.get("연번", 0)) for r in existing if str(r.get("연번", "")).isdigit()],
+                                default=0,
+                            )
+                            add_num = str(max_num + 1)
+                        teachers_ws.append_row([add_num, add_dept.strip(), add_name.strip()])
                         st.cache_data.clear()
-                        st.success(f"{add_dept} {add_name} 추가됨")
+                        st.success(f"{add_num}. {add_dept} {add_name} 추가됨")
                     except Exception as e:
                         st.error(f"추가 실패: {e}")
 
@@ -461,8 +516,133 @@ def render_admin_page():
                 except Exception:
                     pass
 
-    # 탭 4: 공유 링크
+    # 탭 4: 결재 명부 다운로드
     with tab4:
+        st.subheader("📄 결재용 연수 확인 명부 생성")
+        st.caption(
+            "선택한 연수의 교직원 명부 + 서명 이미지를 합쳐서 A4 1장 PDF로 생성합니다. "
+            "한글에서 열어 편집하거나 바로 인쇄해서 결재 올릴 수 있습니다."
+        )
+
+        try:
+            trainings = load_trainings()
+        except Exception as e:
+            st.error(str(e))
+            trainings = []
+
+        if not trainings:
+            st.info("먼저 연수를 등록해주세요.")
+        else:
+            training_options = [f"{t['연수명']} ({t['일시']})" for t in trainings]
+            idx = st.selectbox(
+                "연수 선택",
+                options=range(len(trainings)),
+                format_func=lambda i: training_options[i],
+                index=None,
+                placeholder="연수를 선택하세요...",
+                key="roster_training_select",
+            )
+
+            if idx is not None:
+                selected_training = trainings[idx]
+                training_id = str(selected_training["training_id"])
+
+                # 해당 연수의 서명 기록 조회
+                try:
+                    _, records_ws, _ = get_sheets()
+                    all_records = records_ws.get_all_records()
+                    training_records = [
+                        r for r in all_records if str(r["training_id"]) == training_id
+                    ]
+                except Exception as e:
+                    st.error(f"서명 기록 조회 실패: {e}")
+                    training_records = []
+
+                # 교직원 명부 (순서대로)
+                try:
+                    teachers = load_teachers_ordered()
+                except Exception as e:
+                    st.error(f"교직원 명부 조회 실패: {e}")
+                    teachers = []
+
+                if not teachers:
+                    st.warning("교직원 명부가 비어있습니다.")
+                else:
+                    signed_count = len(training_records)
+                    total_count = len(teachers)
+
+                    c1, c2, c3 = st.columns(3)
+                    c1.metric("전체 교직원", f"{total_count}명")
+                    c2.metric("서명 완료", f"{signed_count}명")
+                    c3.metric(
+                        "미서명",
+                        f"{total_count - signed_count}명",
+                        delta=None,
+                    )
+
+                    # 생성 버튼
+                    if st.button("📥 결재 명부 PDF 생성", type="primary", use_container_width=True):
+                        with st.spinner("서명 이미지를 불러와 PDF를 생성하는 중..."):
+                            try:
+                                # 서명 이미지 다운로드: {(부서, 이름): png_bytes}
+                                signatures = {}
+                                progress = st.progress(0)
+                                for i, r in enumerate(training_records):
+                                    file_id = extract_file_id_from_url(
+                                        str(r.get("서명URL", ""))
+                                    )
+                                    if file_id:
+                                        try:
+                                            png = download_signature_from_drive(file_id)
+                                            signatures[(str(r["부서"]), str(r["이름"]))] = png
+                                        except Exception as ex:
+                                            st.warning(
+                                                f"{r['부서']} {r['이름']}: 서명 이미지 다운로드 실패 ({ex})"
+                                            )
+                                    progress.progress((i + 1) / max(len(training_records), 1))
+                                progress.empty()
+
+                                # PDF 생성
+                                pdf_bytes = generate_attendance_pdf(
+                                    training_name=str(selected_training["연수명"]),
+                                    training_date=str(selected_training["일시"]),
+                                    teachers=teachers,
+                                    signatures=signatures,
+                                    school_year=datetime.datetime.now().strftime("%Y학년도"),
+                                )
+
+                                # 다운로드 버튼 (세션 저장)
+                                st.session_state["roster_pdf"] = pdf_bytes
+                                st.session_state["roster_filename"] = (
+                                    f"연수확인명부_{selected_training['연수명']}.pdf"
+                                )
+                                st.success(
+                                    f"✅ PDF 생성 완료! "
+                                    f"({len(signatures)}명 서명 포함, 총 {total_count}명)"
+                                )
+                            except Exception as e:
+                                st.error(f"PDF 생성 실패: {e}")
+                                import traceback
+                                with st.expander("상세 에러"):
+                                    st.code(traceback.format_exc())
+
+                    # 생성된 PDF 다운로드
+                    if "roster_pdf" in st.session_state:
+                        st.download_button(
+                            "⬇️ PDF 다운로드",
+                            data=st.session_state["roster_pdf"],
+                            file_name=st.session_state.get(
+                                "roster_filename", "연수확인명부.pdf"
+                            ),
+                            mime="application/pdf",
+                            use_container_width=True,
+                        )
+                        st.caption(
+                            "💡 한글 프로그램에서 [파일 → 불러오기 → PDF] 로 열어 편집 가능합니다."
+                        )
+
+    # 탭 5: 공유 링크
+    with tab5:
         st.subheader("참석자 공유 링크")
         st.caption(
             "모든 참석자는 같은 링크로 접속해서 직접 연수를 선택합니다."
@@ -489,8 +669,8 @@ def render_admin_page():
         except ImportError:
             st.caption("(qrcode 패키지 설치 시 QR 자동 생성)")
 
-    # 탭 5: 진단
-    with tab5:
+    # 탭 6: 진단
+    with tab6:
         render_diagnostics()
         if st.button("🔄 캐시 초기화"):
             st.cache_resource.clear()
