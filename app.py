@@ -144,6 +144,7 @@ def upload_signature_to_drive(png_bytes: bytes, filename: str) -> tuple[str, str
         body={"name": filename, "parents": [DRIVE_FOLDER_ID]},
         media_body=media,
         fields="id, webViewLink",
+        supportsAllDrives=True,
     ).execute()
     return file["id"], file["webViewLink"]
 
@@ -520,7 +521,9 @@ def render_diagnostics():
 
     try:
         service = get_drive_service()
-        folder = service.files().get(fileId=DRIVE_FOLDER_ID, fields="id,name").execute()
+        folder = service.files().get(
+            fileId=DRIVE_FOLDER_ID, fields="id,name", supportsAllDrives=True
+        ).execute()
         st.success(f"✅ Drive 폴더: `{folder['name']}`")
     except Exception as e:
         st.error(f"❌ Drive 폴더 접근 실패: {e}")
