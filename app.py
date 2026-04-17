@@ -85,6 +85,21 @@ def get_sheets():
     # 서명기록
     try:
         records = sh.worksheet("서명기록")
+        # 헤더 순서 검증 (append_row는 위치 기준이므로 헤더 순서가 중요)
+        header = records.row_values(1)
+        expected = ["training_id", "연수명", "부서", "이름", "제출시각", "서명파일", "서명URL", "서명FileID"]
+        if header and header[:len(expected)] != expected[:len(header)]:
+            # 심각한 불일치: 부서/이름 순서 뒤바뀜 등
+            if "부서" in header and "이름" in header:
+                dept_idx = header.index("부서")
+                name_idx = header.index("이름")
+                if dept_idx != 2 or name_idx != 3:
+                    raise RuntimeError(
+                        f"❌ '서명기록' 시트 헤더 순서가 잘못되었습니다.\n\n"
+                        f"현재: {header}\n"
+                        f"필요: {expected}\n\n"
+                        f"Spreadsheet에서 헤더를 수정하고 기존 데이터를 정리해주세요."
+                    )
     except gspread.WorksheetNotFound:
         records = sh.add_worksheet("서명기록", rows=1000, cols=8)
         records.append_row(
