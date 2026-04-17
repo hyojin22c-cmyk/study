@@ -109,9 +109,9 @@ def generate_attendance_pdf(
     margin_left = 15 * mm
     margin_right = 15 * mm
     margin_top = 15 * mm
-    margin_bottom = 15 * mm
+    margin_bottom = 20 * mm  # 하단 여백 넉넉히
 
-    content_w = page_w - margin_left - margin_right  # 사용 가능 폭
+    content_w = page_w - margin_left - margin_right
 
     # ── 제목 ──
     title = f"{school_year} 교직원 연수 확인 명부"
@@ -120,20 +120,41 @@ def generate_attendance_pdf(
     c.drawCentredString(page_w / 2, title_y, title)
 
     # ── 2단 표 레이아웃 ──
-    # 각 단: 연번(8mm) | 부서(22mm) | 이름(18mm) | 확인(32mm) = 80mm
-    # 단 사이 간격: 10mm
-    # 총: 80 + 10 + 80 = 170mm (content_w는 180mm이므로 양쪽 여유 5mm)
     col_widths = [8 * mm, 22 * mm, 18 * mm, 32 * mm]
-    column_w = sum(col_widths)  # 80mm
+    column_w = sum(col_widths)
     gap = 10 * mm
     total_w = column_w * 2 + gap
-    left_col_x = (page_w - total_w) / 2  # 가운데 정렬
+    left_col_x = (page_w - total_w) / 2
     right_col_x = left_col_x + column_w + gap
 
-    # ── 표 위치 ──
-    table_top_y = title_y - 10 * mm
-    header_h = 7 * mm
-    row_h = 8 * mm  # 서명 들어갈 수 있는 높이
+    # ── 연수명 / 실시 일자 박스 (제목 바로 아래, 표 위) ──
+    info_box_top = title_y - 6 * mm
+    info_box_h = 10 * mm
+    info_box_bottom = info_box_top - info_box_h
+
+    c.setLineWidth(0.5)
+    c.rect(left_col_x, info_box_bottom, total_w, info_box_h, fill=0, stroke=1)
+
+    mid_x = left_col_x + total_w / 2
+    c.line(mid_x, info_box_top, mid_x, info_box_bottom)
+
+    c.setFont("KFont", 10)
+    info_text_y = info_box_bottom + (info_box_h - 10) / 2 + 1.5
+    c.drawString(
+        left_col_x + 3 * mm,
+        info_text_y,
+        f"연수명 : {training_name}",
+    )
+    c.drawString(
+        mid_x + 3 * mm,
+        info_text_y,
+        f"실시 일자 : {training_date}",
+    )
+
+    # ── 표 위치 (정보 박스 아래로 내려감) ──
+    table_top_y = info_box_bottom - 4 * mm
+    header_h = 6.5 * mm
+    row_h = 7 * mm
 
     # ── 인원 분할 (좌/우 단) ──
     total = len(teachers)
@@ -160,7 +181,7 @@ def generate_attendance_pdf(
         headers = ["연번", "부서", "이름", "확인"]
         x_cursor = col_x
         for header, cw in zip(headers, col_widths):
-            c.drawCentredString(x_cursor + cw / 2, table_top_y - header_h + 2 * mm, header)
+            c.drawCentredString(x_cursor + cw / 2, table_top_y - header_h + 1.8 * mm, header)
             x_cursor += cw
 
         # 헤더 세로선
@@ -186,13 +207,13 @@ def generate_attendance_pdf(
 
             # 연번
             num = start_num + i
-            c.drawCentredString(col_x + col_widths[0] / 2, row_bottom + 2.5 * mm, str(num))
+            c.drawCentredString(col_x + col_widths[0] / 2, row_bottom + 2.2 * mm, str(num))
 
             # 부서 (같은 부서 연속이면 첫 행만)
             if dept != prev_dept:
                 c.drawCentredString(
                     col_x + col_widths[0] + col_widths[1] / 2,
-                    row_bottom + 2.5 * mm,
+                    row_bottom + 2.2 * mm,
                     dept,
                 )
             prev_dept = dept
@@ -200,7 +221,7 @@ def generate_attendance_pdf(
             # 이름
             c.drawCentredString(
                 col_x + col_widths[0] + col_widths[1] + col_widths[2] / 2,
-                row_bottom + 2.5 * mm,
+                row_bottom + 2.2 * mm,
                 name,
             )
 
@@ -228,24 +249,7 @@ def generate_attendance_pdf(
     # 우단
     draw_column(right_col_x, half + 1, right_half)
 
-    # ── 하단 정보 ──
-    footer_y = table_top_y - table_h - 12 * mm
-    c.setFont("KFont", 10)
-    c.drawString(left_col_x, footer_y, f"연수명: {training_name}")
-    c.drawString(left_col_x, footer_y - 6 * mm, f"연수일자: {training_date}")
 
-    # 서명 통계 (선택)
-    signed_count = len(signatures)
-    c.setFont("KFont", 9)
-    c.drawRightString(
-        page_w - margin_right,
-        footer_y,
-        f"참석: {signed_count}명 / 전체: {total}명",
-    )
-
-    c.showPage()
-    c.save()
-    return buf.getvalue()
 
 
 # ───────────────────────────────────────────────────────
