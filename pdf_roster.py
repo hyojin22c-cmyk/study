@@ -249,17 +249,6 @@ def generate_attendance_pdf(
     # 우단
     draw_column(right_col_x, half + 1, right_half)
 
-    # ── 참석 통계 (표 아래 우측, 작은 회색 글씨) ──
-    signed_count = len(signatures)
-    c.setFont("KFont", 8)
-    c.setFillColorRGB(0.4, 0.4, 0.4)
-    c.drawRightString(
-        left_col_x + total_w,
-        table_top_y - table_h - 4 * mm,
-        f"(참석 {signed_count}명 / 전체 {total}명)",
-    )
-    c.setFillColorRGB(0, 0, 0)
-
     c.showPage()
     c.save()
     return buf.getvalue()
