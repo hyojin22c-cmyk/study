@@ -367,11 +367,25 @@ def render_signing_flow():
                 st.error(f"저장 중 오류: {e}")
 
 
+def render_attendee_footer():
+    """참석자 페이지 하단의 담백한 관리자 링크."""
+    st.divider()
+    st.caption(
+        "🔧 연수 담당자이신가요? → [관리자 페이지로 이동](?admin=1)"
+    )
+
+
 # ───────────────────────────────────────────────────────
 # 관리자 페이지
 # ───────────────────────────────────────────────────────
 def render_admin_page():
-    st.title("🔧 연수 방명록 관리")
+    # 헤더: 제목 + 참석자 페이지 링크
+    c1, c2 = st.columns([3, 1])
+    with c1:
+        st.title("🔧 연수 방명록 관리")
+    with c2:
+        st.write("")  # 세로 정렬용 여백
+        st.link_button("📝 참석자 페이지", url="?", use_container_width=True)
 
     if not st.session_state.get("admin_authed"):
         pw = st.text_input("관리자 비밀번호", type="password")
@@ -382,6 +396,11 @@ def render_admin_page():
             else:
                 st.error("비밀번호가 틀렸습니다.")
         return
+
+    # 로그아웃 버튼 (탭 위)
+    if st.button("🚪 로그아웃", key="admin_logout"):
+        st.session_state["admin_authed"] = False
+        st.rerun()
 
     tab1, tab2, tab3, tab4, tab5, tab6 = st.tabs(
         ["📋 연수 관리", "👥 교직원 명부", "📊 서명 기록", "📄 결재 명부", "🔗 공유 링크", "🔍 진단"]
@@ -786,6 +805,7 @@ def main():
         render_admin_page()
     else:
         render_signing_flow()
+        render_attendee_footer()
 
 
 if __name__ == "__main__":
