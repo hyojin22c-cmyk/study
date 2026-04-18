@@ -207,6 +207,29 @@ def download_signature_from_drive(file_id: str) -> bytes:
     return buf.getvalue()
 
 
+def delete_signature_from_drive(file_id: str) -> None:
+    """Drive에서 서명 파일 삭제 (실패해도 예외 raise만, 호출부에서 처리)."""
+    service = get_drive_service()
+    service.files().delete(fileId=file_id, supportsAllDrives=True).execute()
+
+
+def delete_signature_record(row_number: int, file_id: str = "") -> None:
+    """
+    서명 기록 삭제 (Sheets 행 + Drive 파일).
+    row_number: 1-indexed (헤더 포함). 실제 데이터 첫 행은 2.
+    """
+    # Drive 파일 먼저 삭제 (있으면)
+    if file_id:
+        try:
+            delete_signature_from_drive(file_id)
+        except Exception:
+            pass  # Drive 파일이 이미 없어도 Sheets 행은 지움
+
+    # Sheets 행 삭제
+    _, records_ws, _ = get_sheets()
+    records_ws.delete_rows(row_number)
+
+
 def extract_file_id_from_url(url: str) -> str | None:
     """Drive URL에서 파일 ID 추출."""
     # https://drive.google.com/file/d/{ID}/view?usp=drivesdk
@@ -251,6 +274,27 @@ def is_canvas_empty(image_data: np.ndarray) -> bool:
 def render_signing_flow():
     st.title("📝 연수 방명록")
 
+    # 방금 서명 제출한 경우: 확인 화면 표시
+    if "just_submitted" in st.session_state:
+        info = st.session_state["just_submitted"]
+        st.success(
+            f"✅ **{info['dept']} {info['name']}**님, 서명이 정상적으로 제출되었습니다!"
+        )
+        st.markdown("**제출된 서명 확인:**")
+        st.image(info["png"], width=500)
+        st.caption(
+            "📌 서명이 흐리거나 잘못되었다면 연수 담당자에게 재서명을 요청해주세요."
+        )
+
+        c1, c2 = st.columns(2)
+        if c1.button("🔄 다른 분 서명하기", use_container_width=True, type="primary"):
+            del st.session_state["just_submitted"]
+            st.rerun()
+        if c2.button("🚪 종료", use_container_width=True):
+            del st.session_state["just_submitted"]
+            st.rerun()
+        return
+
     try:
         trainings = load_trainings()
     except Exception as e:
@@ -263,27 +307,35 @@ def render_signing_flow():
         st.info("현재 진행 중인 연수가 없습니다.")
         return
 
-    # 1단계: 연수 선택
-    training_labels = [f"{t['연수명']}  ({t['일시']})" for t in active]
-    idx = st.selectbox(
-        "**1️⃣ 참석한 연수를 선택하세요**",
-        options=range(len(active)),
-        format_func=lambda i: training_labels[i],
-        index=None,
-        placeholder="연수를 선택하세요...",
-    )
+    # 1단계: 연수 선택 (1개면 자동 선택)
+    if len(active) == 1:
+        training = active[0]
+        training_id = str(training["training_id"])
+        st.success(
+            f"📝 **{training['연수명']}**  \n"
+            f"📅 {training['일시']} · 📍 {training['장소']}"
+        )
+    else:
+        training_labels = [f"{t['연수명']}  ({t['일시']})" for t in active]
+        idx = st.selectbox(
+            "**1️⃣ 참석한 연수를 선택하세요**",
+            options=range(len(active)),
+            format_func=lambda i: training_labels[i],
+            index=None,
+            placeholder="연수를 선택하세요...",
+        )
 
-    if idx is None:
-        st.caption("👆 위에서 연수를 선택하면 다음 단계가 나타납니다.")
-        return
+        if idx is None:
+            st.caption("👆 위에서 연수를 선택하면 다음 단계가 나타납니다.")
+            return
 
-    training = active[idx]
-    training_id = str(training["training_id"])
+        training = active[idx]
+        training_id = str(training["training_id"])
 
-    st.success(
-        f"**선택된 연수**: {training['연수명']}  \n"
-        f"📅 {training['일시']} · 📍 {training['장소']}"
-    )
+        st.success(
+            f"**선택된 연수**: {training['연수명']}  \n"
+            f"📅 {training['일시']} · 📍 {training['장소']}"
+        )
 
     # 2단계: 이름 검색 (부서 선택 없이 바로 이름으로)
     try:
@@ -379,8 +431,15 @@ def render_signing_flow():
                 png_bytes = canvas_to_png_bytes(canvas_result.image_data)
                 save_signature(training_id, training["연수명"], dept, name, png_bytes)
                 load_signed_names_for_training.clear()
-                st.success(f"✅ {dept} {name}님, 제출 완료! 참석해주셔서 감사합니다.")
+                # 세션에 방금 제출한 서명 정보 저장 (확인용)
+                st.session_state["just_submitted"] = {
+                    "dept": dept,
+                    "name": name,
+                    "png": png_bytes,
+                    "training_id": training_id,
+                }
                 st.balloons()
+                st.rerun()
             except Exception as e:
                 st.error(f"저장 중 오류: {e}")
 
@@ -546,14 +605,70 @@ def render_admin_page():
             st.info("아직 서명 기록이 없습니다.")
         else:
             training_names = ["전체"] + [t["연수명"] for t in trainings]
-            selected = st.selectbox("연수 선택", training_names)
+            selected = st.selectbox("연수 선택", training_names, key="records_training_select")
 
-            filtered = (
-                records if selected == "전체"
-                else [r for r in records if r["연수명"] == selected]
-            )
-            st.caption(f"총 {len(filtered)}건")
-            st.dataframe(filtered, use_container_width=True, hide_index=True)
+            # 원본 행 번호를 유지하면서 필터
+            # get_all_records는 헤더 제외한 리스트를 반환 → 실제 시트 행번호는 index+2
+            indexed_records = [(i + 2, r) for i, r in enumerate(records)]
+            if selected != "전체":
+                filtered_indexed = [
+                    (row_num, r) for row_num, r in indexed_records
+                    if r.get("연수명") == selected
+                ]
+            else:
+                filtered_indexed = indexed_records
+
+            st.caption(f"총 {len(filtered_indexed)}건")
+
+            # 삭제 확인 상태 관리
+            pending_delete_key = "pending_delete_row"
+
+            # 개별 레코드 표시 + 삭제 버튼
+            with st.expander("📋 개별 기록 보기 (삭제 가능)", expanded=False):
+                for row_num, r in filtered_indexed:
+                    dept = str(r.get("부서") or r.get("소속") or "-")
+                    name = str(r.get("이름") or "-")
+                    time = str(r.get("제출시각") or "-")
+                    training = str(r.get("연수명") or "-")
+                    file_id = str(r.get("서명FileID") or "")
+
+                    c1, c2 = st.columns([5, 1])
+                    with c1:
+                        st.text(f"[{training}] {dept} {name} · {time}")
+                    with c2:
+                        # 삭제 확인 단계: pending이 이 행을 가리키면 "정말 삭제" 버튼
+                        if st.session_state.get(pending_delete_key) == row_num:
+                            if st.button("⚠️ 확정", key=f"confirm_del_{row_num}", type="primary"):
+                                try:
+                                    delete_signature_record(row_num, file_id)
+                                    st.session_state.pop(pending_delete_key, None)
+                                    st.cache_data.clear()
+                                    load_signed_names_for_training.clear()
+                                    st.success(f"{dept} {name} 서명 삭제됨")
+                                    st.rerun()
+                                except Exception as e:
+                                    st.error(f"삭제 실패: {e}")
+                        else:
+                            if st.button("🗑", key=f"del_{row_num}", help="서명 삭제"):
+                                st.session_state[pending_delete_key] = row_num
+                                st.rerun()
+
+                # 삭제 취소
+                if pending_delete_key in st.session_state:
+                    st.warning(
+                        "⚠️ 위에서 '확정'을 다시 누르면 서명 기록과 이미지가 **영구 삭제**됩니다."
+                    )
+                    if st.button("취소", key="cancel_delete"):
+                        st.session_state.pop(pending_delete_key, None)
+                        st.rerun()
+
+            # 전체 dataframe (복사/확인용)
+            with st.expander("📊 표로 보기"):
+                st.dataframe(
+                    [r for _, r in filtered_indexed],
+                    use_container_width=True,
+                    hide_index=True,
+                )
 
             # 미서명자 (선택한 연수 기준)
             if selected != "전체":
@@ -564,7 +679,7 @@ def render_admin_page():
                     }
                     signed = {
                         (str(r.get("부서") or r.get("소속") or ""), str(r.get("이름", "")))
-                        for r in filtered
+                        for _, r in filtered_indexed
                     }
                     missing = sorted(all_teachers - signed)
                     if missing:
@@ -641,8 +756,41 @@ def render_admin_page():
                         delta=None,
                     )
 
-                    # 생성 버튼
-                    if st.button("📥 결재 명부 PDF 생성", type="primary", use_container_width=True):
+                    # 생성 버튼 (일반 + 마감까지 원클릭)
+                    current_status = str(selected_training.get("상태", "진행중"))
+                    is_ongoing = current_status != "종료"
+
+                    btn_col1, btn_col2 = st.columns(2)
+                    gen_clicked = btn_col1.button(
+                        "📥 결재 명부 PDF 생성",
+                        type="primary",
+                        use_container_width=True,
+                    )
+                    close_and_gen_clicked = btn_col2.button(
+                        "🔒 연수 마감 + PDF 생성",
+                        use_container_width=True,
+                        disabled=not is_ongoing,
+                        help=(
+                            "연수를 '종료' 상태로 바꾸고 PDF를 생성합니다. "
+                            "이후 참석자는 더 이상 서명할 수 없습니다."
+                            if is_ongoing
+                            else "이미 종료된 연수입니다."
+                        ),
+                    )
+
+                    # 마감 버튼 눌렀으면 먼저 상태 변경
+                    if close_and_gen_clicked:
+                        try:
+                            trainings_ws, _, _ = get_sheets()
+                            cell = trainings_ws.find(str(selected_training["training_id"]))
+                            if cell:
+                                trainings_ws.update_cell(cell.row, 5, "종료")
+                                st.cache_data.clear()
+                                st.success("🔒 연수를 '종료' 상태로 변경했습니다.")
+                        except Exception as e:
+                            st.error(f"연수 마감 실패 (PDF는 계속 생성 시도): {e}")
+
+                    if gen_clicked or close_and_gen_clicked:
                         with st.spinner("서명 이미지를 불러와 PDF를 생성하는 중..."):
                             try:
                                 # 서명 이미지 다운로드: {(부서, 이름): png_bytes}
