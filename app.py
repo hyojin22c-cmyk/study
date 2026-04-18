@@ -807,6 +807,65 @@ def render_diagnostics():
     except Exception as e:
         st.error(f"❌ Drive 폴더 접근 실패: {e}")
 
+    # ── 교직원 명부 상세 진단 ──
+    st.divider()
+    st.subheader("👥 교직원 명부 상세")
+
+    try:
+        load_teachers.clear()
+        load_teachers_ordered.clear()
+        _, _, teachers_ws = get_sheets()
+        raw_rows = teachers_ws.get_all_records()
+        by_dept = load_teachers()
+        ordered = load_teachers_ordered()
+
+        st.text(f"시트 원본 행 수: {len(raw_rows)}")
+        st.text(f"파싱된 교직원 수 (부서별 합계): {sum(len(v) for v in by_dept.values())}")
+        st.text(f"정렬된 명부 길이: {len(ordered)}")
+
+        # 특정 이름 검색
+        search_name = st.text_input(
+            "🔎 특정 이름 검색 (명부에서 찾기)",
+            placeholder="예: 공명현, 최효진",
+        )
+        if search_name:
+            search_name = search_name.strip()
+            st.write("**시트 원본에서 매칭되는 행:**")
+            matches = []
+            for i, r in enumerate(raw_rows, start=2):  # 2부터 (헤더 제외)
+                name_val = str(r.get("이름", ""))
+                if search_name in name_val:
+                    matches.append((i, r, repr(name_val)))
+            if matches:
+                for row_num, r, name_repr in matches:
+                    st.code(
+                        f"행 {row_num}: 연번={r.get('연번')!r}, "
+                        f"부서={r.get('부서')!r}, "
+                        f"이름={name_repr}"
+                    )
+            else:
+                st.error(f"'{search_name}'을 포함하는 이름이 시트 원본에 없습니다.")
+
+            st.write("**파싱 결과에서 매칭:**")
+            found = [(d, n) for d, names in by_dept.items() for n in names if search_name in n]
+            if found:
+                for d, n in found:
+                    st.text(f"  [{d}] {n!r}")
+            else:
+                st.error(f"'{search_name}'이 파싱 결과에 없습니다.")
+
+        # 전체 이름 펼쳐보기
+        with st.expander("📋 파싱된 전체 명부 보기 (공백/특수문자 확인)"):
+            for d in sorted(by_dept.keys()):
+                st.text(f"[{d}] ({len(by_dept[d])}명)")
+                for n in sorted(by_dept[d]):
+                    st.text(f"    {n!r}")  # repr로 보여서 숨은 공백 확인 가능
+
+    except Exception as e:
+        st.error(f"교직원 명부 진단 실패: {e}")
+        import traceback
+        st.code(traceback.format_exc())
+
 
 # ───────────────────────────────────────────────────────
 # 라우팅
