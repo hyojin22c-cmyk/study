@@ -446,6 +446,143 @@ def render_attendee_footer():
     )
 
 
+def render_screen_mode():
+    """
+    연수장 스크린/프로젝터 투사용 전체화면 모드.
+    큰 QR + 연수명 + 실시간 서명 현황 표시.
+    URL: ?screen=1
+    """
+    # 여백을 최대한 없애고 전체화면 느낌 주기
+    st.markdown(
+        """
+        <style>
+        .block-container {
+            padding-top: 1.5rem !important;
+            padding-bottom: 1rem !important;
+            max-width: 100% !important;
+        }
+        #MainMenu, header, footer {visibility: hidden;}
+        </style>
+        """,
+        unsafe_allow_html=True,
+    )
+
+    # 연수 정보 로드
+    try:
+        trainings = load_trainings()
+    except Exception as e:
+        st.error(f"시스템 오류: {e}")
+        return
+
+    active = [t for t in trainings if str(t.get("상태", "")).strip() != "종료"]
+
+    # 현재 URL (QR 생성용)
+    # 브라우저에서 열고있는 주소로부터 screen=1만 제거
+    # Streamlit은 서버사이드라 URL을 직접 못 읽음 → session에서 base_url 쓰거나 사용자가 설정한 값 사용
+    base_url = st.session_state.get("base_url", "")
+    # 혹은 쿼리 파라미터 없는 루트 링크로 보정
+    if not base_url or base_url == "https://your-app.streamlit.app":
+        st.warning(
+            "⚠️ 관리자 페이지 '🔗 공유 링크' 탭에서 **배포 URL을 먼저 입력**해야 QR이 생성됩니다."
+        )
+        return
+
+    # 상단: 연수명 (크게)
+    if not active:
+        st.markdown(
+            "<h1 style='text-align:center; color:#888;'>진행 중인 연수가 없습니다</h1>",
+            unsafe_allow_html=True,
+        )
+        return
+
+    # 진행 중 연수 1개면 그 정보 크게, 여러 개면 "참석하실 연수를 선택하세요"
+    if len(active) == 1:
+        t = active[0]
+        st.markdown(
+            f"<h1 style='text-align:center; margin-bottom:0;'>📝 {t['연수명']}</h1>"
+            f"<p style='text-align:center; font-size:1.3rem; color:#555; margin-top:0.2rem;'>"
+            f"📅 {t['일시']} · 📍 {t['장소']}</p>",
+            unsafe_allow_html=True,
+        )
+    else:
+        st.markdown(
+            "<h1 style='text-align:center;'>📝 연수 방명록</h1>"
+            "<p style='text-align:center; font-size:1.2rem; color:#555;'>"
+            "QR을 스캔하여 참석하신 연수를 선택해주세요</p>",
+            unsafe_allow_html=True,
+        )
+
+    # 가운데: QR 코드 (큼지막하게) + 좌우 정보
+    col_left, col_qr, col_right = st.columns([1, 2, 1])
+
+    with col_qr:
+        try:
+            import qrcode
+            from qrcode.constants import ERROR_CORRECT_H
+            qr = qrcode.QRCode(
+                version=None,
+                error_correction=ERROR_CORRECT_H,
+                box_size=14,  # 크게
+                border=2,
+            )
+            qr.add_data(base_url)
+            qr.make(fit=True)
+            img = qr.make_image(fill_color="black", back_color="white")
+            buf = io.BytesIO()
+            img.save(buf, format="PNG")
+            st.image(buf.getvalue(), use_container_width=True)
+        except ImportError:
+            st.error("qrcode 패키지 필요")
+            return
+
+    # 우측: 안내 + 실시간 카운터
+    with col_right:
+        st.markdown("### 📱 참여 방법")
+        st.markdown(
+            "1. 카메라로 QR 스캔\n"
+            "2. 본인 이름 선택\n"
+            "3. 손가락으로 서명"
+        )
+
+        # 현재 서명 현황 (첫 번째 active 연수 기준)
+        if active:
+            t = active[0]
+            try:
+                signed = load_signed_names_for_training(str(t["training_id"]))
+                teachers = load_teachers()
+                total = sum(len(names) for names in teachers.values())
+                signed_count = len(signed)
+                st.markdown("---")
+                st.metric(
+                    label="현재 서명 완료",
+                    value=f"{signed_count} / {total} 명",
+                    delta=f"{int(signed_count/total*100)}%" if total else None,
+                )
+            except Exception:
+                pass
+
+    # 좌측: URL 직접 입력용 텍스트
+    with col_left:
+        st.markdown("### 🔗 직접 접속")
+        st.caption("QR이 안 되시면 주소창에 직접 입력:")
+        # URL을 길어서 줄바꿈되는 경우 대비 작게
+        st.markdown(
+            f"<p style='font-size:0.85rem; word-break:break-all;'>{base_url}</p>",
+            unsafe_allow_html=True,
+        )
+
+        st.markdown("---")
+        st.caption(
+            "🔄 이 페이지는 새로고침(F5)하면 서명 현황이 업데이트됩니다."
+        )
+
+    # 하단: 관리자로 돌아가기 (작게)
+    st.markdown("---")
+    st.caption(
+        "[🔧 관리자 페이지](?admin=1)"
+    )
+
+
 # ───────────────────────────────────────────────────────
 # 관리자 페이지
 # ───────────────────────────────────────────────────────
@@ -890,14 +1027,35 @@ def render_admin_page():
     # 탭 5: 공유 링크
     with tab5:
         st.subheader("참석자 공유 링크")
-        st.caption(
-            "모든 참석자는 같은 링크로 접속해서 직접 연수를 선택합니다."
-        )
         base_url = st.text_input(
             "배포된 앱 URL",
             value=st.session_state.get("base_url", "https://your-app.streamlit.app"),
         )
         st.session_state["base_url"] = base_url
+
+        st.markdown("---")
+
+        st.markdown("### 📺 연수장 스크린 투사용")
+        st.caption(
+            "연수장 프로젝터/TV에 띄우세요. 참석자들이 각자 자리에서 QR을 찍으면 병목 없이 동시 서명 가능합니다."
+        )
+
+        # 스크린 모드 링크 (쿼리 파라미터 screen=1)
+        screen_url = f"{base_url}/?screen=1" if base_url else "?screen=1"
+        st.link_button(
+            "🖥 스크린 투사 모드 열기 (새 탭)",
+            url=screen_url,
+            use_container_width=True,
+            type="primary",
+        )
+        st.caption(
+            "💡 팁: 새 탭에서 열린 후 **F11**로 전체화면 전환 · 자동으로 진행중인 연수의 QR을 표시합니다."
+        )
+
+        st.markdown("---")
+
+        st.markdown("### 📎 직접 공유용 링크/QR")
+        st.caption("단톡방, 이메일 등으로 직접 링크를 공유할 때 쓰세요.")
         st.code(base_url, language=None)
 
         try:
@@ -907,7 +1065,7 @@ def render_admin_page():
             img.save(buf, format="PNG")
             st.image(buf.getvalue(), width=250, caption="QR 코드")
             st.download_button(
-                "QR 코드 다운로드",
+                "QR 코드 이미지 다운로드",
                 buf.getvalue(),
                 file_name="연수방명록_QR.png",
                 mime="image/png",
@@ -1018,9 +1176,23 @@ def render_diagnostics():
 # 라우팅
 # ───────────────────────────────────────────────────────
 def main():
-    st.set_page_config(page_title="연수 방명록", page_icon="📝", layout="centered")
+    params = st.query_params
 
-    if st.query_params.get("admin") == "1":
+    # 페이지 설정은 모드별로 한 번만
+    if params.get("screen") == "1":
+        st.set_page_config(
+            page_title="연수 방명록 - 스크린 모드",
+            page_icon="📝",
+            layout="wide",
+        )
+        render_screen_mode()
+        return
+
+    st.set_page_config(
+        page_title="연수 방명록", page_icon="📝", layout="centered"
+    )
+
+    if params.get("admin") == "1":
         render_admin_page()
     else:
         render_signing_flow()
