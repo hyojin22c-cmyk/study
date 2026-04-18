@@ -280,17 +280,13 @@ def render_signing_flow():
         st.success(
             f"✅ **{info['dept']} {info['name']}**님, 서명이 정상적으로 제출되었습니다!"
         )
-        st.markdown("**제출된 서명 확인:**")
-        st.image(info["png"], width=500)
+        st.markdown("**제출된 서명:**")
+        st.image(info["png"], use_container_width=True)
         st.caption(
             "📌 서명이 흐리거나 잘못되었다면 연수 담당자에게 재서명을 요청해주세요."
         )
 
-        c1, c2 = st.columns(2)
-        if c1.button("🔄 다른 분 서명하기", use_container_width=True, type="primary"):
-            del st.session_state["just_submitted"]
-            st.rerun()
-        if c2.button("🚪 종료", use_container_width=True):
+        if st.button("확인", use_container_width=True, type="primary"):
             del st.session_state["just_submitted"]
             st.rerun()
         return
@@ -403,23 +399,21 @@ def render_signing_flow():
 
     # 3단계: 서명
     st.markdown(f"**3️⃣ 서명** — [{dept}] {name}  아래 영역에 서명해주세요")
+    st.caption("💡 가로로 돌리면 더 넓게 서명할 수 있어요")
 
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0)",
         stroke_width=4,
         stroke_color="#000000",
         background_color="#FFFFFF",
-        height=280,
-        width=700,
+        height=220,
+        width=360,  # 핸드폰 세로 화면에 맞춤
         drawing_mode="freedraw",
         key=f"canvas_{training_id}_{dept}_{name}",
         display_toolbar=True,
     )
 
-    st.caption(
-        "💡 좌측 상단 🗑 전체 지우기 · ↶ 되돌리기 · "
-        "모바일에서는 손가락으로, PC에서는 마우스/트랙패드로 서명해주세요."
-    )
+    st.caption("🗑 전체 지우기 · ↶ 되돌리기 (좌측 상단 아이콘)")
 
     if st.button("✅ 서명 제출", type="primary", use_container_width=True):
         if canvas_result.image_data is None or is_canvas_empty(canvas_result.image_data):
