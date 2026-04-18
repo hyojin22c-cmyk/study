@@ -476,15 +476,24 @@ def render_screen_mode():
 
     active = [t for t in trainings if str(t.get("상태", "")).strip() != "종료"]
 
-    # 현재 URL (QR 생성용)
-    # 브라우저에서 열고있는 주소로부터 screen=1만 제거
-    # Streamlit은 서버사이드라 URL을 직접 못 읽음 → session에서 base_url 쓰거나 사용자가 설정한 값 사용
-    base_url = st.session_state.get("base_url", "")
-    # 혹은 쿼리 파라미터 없는 루트 링크로 보정
+    # URL 결정: 쿼리 파라미터(url=) > session_state > 수동입력 fallback
+    # 쿼리 파라미터로 들어오면 그게 최우선 (스크린 링크에 URL 박아서 넘기는 방식)
+    params = st.query_params
+    base_url = (
+        params.get("url")
+        or st.session_state.get("base_url", "")
+    )
+
+    # URL이 없으면 수동 입력 받기 (안전망)
     if not base_url or base_url == "https://your-app.streamlit.app":
-        st.warning(
-            "⚠️ 관리자 페이지 '🔗 공유 링크' 탭에서 **배포 URL을 먼저 입력**해야 QR이 생성됩니다."
+        st.warning("⚠️ 앱 URL이 설정되지 않았습니다.")
+        manual_url = st.text_input(
+            "현재 브라우저 주소창의 URL을 복사해서 붙여넣으세요 (`?screen=1` 부분은 제외)",
+            placeholder="https://your-app.streamlit.app",
         )
+        if manual_url:
+            st.session_state["base_url"] = manual_url.strip().rstrip("/")
+            st.rerun()
         return
 
     # 상단: 연수명 (크게)
@@ -1040,17 +1049,27 @@ def render_admin_page():
             "연수장 프로젝터/TV에 띄우세요. 참석자들이 각자 자리에서 QR을 찍으면 병목 없이 동시 서명 가능합니다."
         )
 
-        # 스크린 모드 링크 (쿼리 파라미터 screen=1)
-        screen_url = f"{base_url}/?screen=1" if base_url else "?screen=1"
+        # 스크린 모드 링크 (쿼리 파라미터에 url 박아서 넘김 → 새 탭에서도 QR 생성 가능)
+        from urllib.parse import quote
+        if base_url:
+            screen_url = f"{base_url}/?screen=1&url={quote(base_url, safe='')}"
+        else:
+            screen_url = "?screen=1"
+
         st.link_button(
             "🖥 스크린 투사 모드 열기 (새 탭)",
             url=screen_url,
             use_container_width=True,
             type="primary",
+            disabled=not base_url or base_url == "https://your-app.streamlit.app",
         )
-        st.caption(
-            "💡 팁: 새 탭에서 열린 후 **F11**로 전체화면 전환 · 자동으로 진행중인 연수의 QR을 표시합니다."
-        )
+        if not base_url or base_url == "https://your-app.streamlit.app":
+            st.warning("👆 먼저 위에 **배포된 앱 URL**을 입력하세요.")
+        else:
+            st.caption(
+                "💡 새 탭에서 열린 후 **F11**로 전체화면 전환 · "
+                "자동으로 진행중인 연수의 QR을 표시합니다."
+            )
 
         st.markdown("---")
 
