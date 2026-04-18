@@ -296,40 +296,53 @@ def render_signing_flow():
         st.warning("교직원 명부가 비어있습니다. 관리자에게 문의해주세요.")
         return
 
-    # 전체 교직원을 "[부서] 이름" 형태의 (dept, name) 튜플 리스트로
+    # 전체 교직원을 "이름 [부서]" 형태의 문자열 리스트로
+    # (st.selectbox는 문자열 옵션에 대해 안정적으로 타이핑 검색이 됨)
     signed = load_signed_names_for_training(training_id)
     all_teachers = []
     for d in sorted(teachers_by_dept.keys()):
         for n in sorted(teachers_by_dept[d]):
             all_teachers.append((d, n))
 
-    available = [(d, n) for (d, n) in all_teachers if (d, n) not in signed]
-    already_signed = [(d, n) for (d, n) in all_teachers if (d, n) in signed]
+    # 검색용 문자열 → (부서, 이름) 역매핑
+    def make_label(dept, name):
+        return f"{name} [{dept}]"
 
-    if not available:
+    available_labels = []
+    label_to_tuple = {}
+    for d, n in all_teachers:
+        if (d, n) not in signed:
+            label = make_label(d, n)
+            available_labels.append(label)
+            label_to_tuple[label] = (d, n)
+
+    already_signed_count = len(all_teachers) - len(available_labels)
+
+    if not available_labels:
         st.info("✅ 모든 교직원이 서명을 완료하셨습니다.")
         return
 
-    # selectbox는 기본적으로 옵션 텍스트 기반 타이핑 검색을 지원
-    selected = st.selectbox(
+    # 이름 순 정렬 (label은 "이름 [부서]" 형태이므로 이름 기준)
+    available_labels.sort()
+
+    selected_label = st.selectbox(
         "**2️⃣ 본인 이름을 선택하세요** (이름 일부를 입력하면 바로 찾을 수 있어요)",
-        options=available,
-        format_func=lambda t: f"{t[1]}  ({t[0]})",  # "김민기 (1학년부)"
+        options=available_labels,
         index=None,
         placeholder="이름 두 글자 입력하면 바로 나와요...",
     )
 
-    # 이미 서명한 사람 수 표시 (진행상황 피드백)
-    if already_signed:
+    # 진행 상황 피드백
+    if already_signed_count > 0:
         st.caption(
-            f"✓ 현재까지 {len(already_signed)}명 서명 완료 "
+            f"✓ 현재까지 {already_signed_count}명 서명 완료 "
             f"(전체 {len(all_teachers)}명)"
         )
 
-    if not selected:
+    if not selected_label:
         return
 
-    dept, name = selected
+    dept, name = label_to_tuple[selected_label]
 
     # 3단계: 서명
     st.markdown(f"**3️⃣ 서명** — [{dept}] {name}  아래 영역에 서명해주세요")
