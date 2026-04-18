@@ -297,37 +297,34 @@ def render_signing_flow():
         return
 
     # 전체 교직원을 "이름 [부서]" 형태의 문자열 리스트로
-    # (st.selectbox는 문자열 옵션에 대해 안정적으로 타이핑 검색이 됨)
+    # 이미 서명한 사람은 체크마크로 표시하되 목록에 포함 (본인이 서명했는지 확인 가능하도록)
     signed = load_signed_names_for_training(training_id)
     all_teachers = []
     for d in sorted(teachers_by_dept.keys()):
         for n in sorted(teachers_by_dept[d]):
             all_teachers.append((d, n))
 
-    # 검색용 문자열 → (부서, 이름) 역매핑
-    def make_label(dept, name):
-        return f"{name} [{dept}]"
+    def make_label(dept, name, is_signed):
+        prefix = "✅ " if is_signed else ""
+        return f"{prefix}{name} [{dept}]"
 
-    available_labels = []
-    label_to_tuple = {}
+    # 모든 교직원을 라벨 → (부서, 이름, 서명여부) 로 매핑
+    all_labels = []
+    label_to_info = {}
     for d, n in all_teachers:
-        if (d, n) not in signed:
-            label = make_label(d, n)
-            available_labels.append(label)
-            label_to_tuple[label] = (d, n)
+        is_signed = (d, n) in signed
+        label = make_label(d, n, is_signed)
+        all_labels.append(label)
+        label_to_info[label] = (d, n, is_signed)
 
-    already_signed_count = len(all_teachers) - len(available_labels)
+    already_signed_count = len(signed)
 
-    if not available_labels:
-        st.info("✅ 모든 교직원이 서명을 완료하셨습니다.")
-        return
-
-    # 이름 순 정렬 (label은 "이름 [부서]" 형태이므로 이름 기준)
-    available_labels.sort()
+    # 미서명자 먼저, 서명완료자 뒤로 정렬
+    all_labels.sort(key=lambda lbl: (label_to_info[lbl][2], lbl))
 
     selected_label = st.selectbox(
         "**2️⃣ 본인 이름을 선택하세요** (이름 일부를 입력하면 바로 찾을 수 있어요)",
-        options=available_labels,
+        options=all_labels,
         index=None,
         placeholder="이름 두 글자 입력하면 바로 나와요...",
     )
@@ -336,13 +333,21 @@ def render_signing_flow():
     if already_signed_count > 0:
         st.caption(
             f"✓ 현재까지 {already_signed_count}명 서명 완료 "
-            f"(전체 {len(all_teachers)}명)"
+            f"(전체 {len(all_teachers)}명) · ✅ 표시는 서명 완료자"
         )
 
     if not selected_label:
         return
 
-    dept, name = label_to_tuple[selected_label]
+    dept, name, is_signed = label_to_info[selected_label]
+
+    # 이미 서명한 사람이면 완료 안내 후 종료
+    if is_signed:
+        st.success(
+            f"✅ **{dept} {name}**님은 이 연수에 이미 서명을 완료하셨습니다.\n\n"
+            f"추가 서명은 필요하지 않습니다. 감사합니다!"
+        )
+        return
 
     # 3단계: 서명
     st.markdown(f"**3️⃣ 서명** — [{dept}] {name}  아래 영역에 서명해주세요")
