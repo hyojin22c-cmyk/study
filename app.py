@@ -285,7 +285,7 @@ def render_signing_flow():
         f"📅 {training['일시']} · 📍 {training['장소']}"
     )
 
-    # 2단계: 부서
+    # 2단계: 이름 검색 (부서 선택 없이 바로 이름으로)
     try:
         teachers_by_dept = load_teachers()
     except Exception as e:
@@ -296,59 +296,60 @@ def render_signing_flow():
         st.warning("교직원 명부가 비어있습니다. 관리자에게 문의해주세요.")
         return
 
-    departments = sorted(teachers_by_dept.keys())
-    dept = st.selectbox(
-        "**2️⃣ 소속 부서**",
-        options=departments,
-        index=None,
-        placeholder="부서를 선택하세요...",
-    )
-
-    if not dept:
-        return
-
-    # 3단계: 이름 (이미 서명한 사람 제외)
+    # 전체 교직원을 "[부서] 이름" 형태의 (dept, name) 튜플 리스트로
     signed = load_signed_names_for_training(training_id)
-    all_names = sorted(teachers_by_dept[dept])
-    available_names = [n for n in all_names if (dept, n) not in signed]
-    already_signed = [n for n in all_names if (dept, n) in signed]
+    all_teachers = []
+    for d in sorted(teachers_by_dept.keys()):
+        for n in sorted(teachers_by_dept[d]):
+            all_teachers.append((d, n))
 
-    if not available_names:
-        st.info(f"✅ {dept} 소속은 모두 서명을 완료하셨습니다.")
-        if already_signed:
-            with st.expander("서명 완료 명단"):
-                st.write(", ".join(already_signed))
+    available = [(d, n) for (d, n) in all_teachers if (d, n) not in signed]
+    already_signed = [(d, n) for (d, n) in all_teachers if (d, n) in signed]
+
+    if not available:
+        st.info("✅ 모든 교직원이 서명을 완료하셨습니다.")
         return
 
-    name = st.selectbox(
-        "**3️⃣ 이름**",
-        options=available_names,
+    # selectbox는 기본적으로 옵션 텍스트 기반 타이핑 검색을 지원
+    selected = st.selectbox(
+        "**2️⃣ 본인 이름을 선택하세요** (이름 일부를 입력하면 바로 찾을 수 있어요)",
+        options=available,
+        format_func=lambda t: f"{t[1]}  ({t[0]})",  # "김민기 (1학년부)"
         index=None,
-        placeholder="이름을 선택하세요...",
+        placeholder="이름 두 글자 입력하면 바로 나와요...",
     )
 
+    # 이미 서명한 사람 수 표시 (진행상황 피드백)
     if already_signed:
-        st.caption(f"✓ 이미 서명 완료: {', '.join(already_signed)}")
+        st.caption(
+            f"✓ 현재까지 {len(already_signed)}명 서명 완료 "
+            f"(전체 {len(all_teachers)}명)"
+        )
 
-    if not name:
+    if not selected:
         return
 
-    # 4단계: 서명
-    st.markdown("**4️⃣ 서명** (아래 영역에 서명해주세요)")
+    dept, name = selected
+
+    # 3단계: 서명
+    st.markdown(f"**3️⃣ 서명** — [{dept}] {name}  아래 영역에 서명해주세요")
 
     canvas_result = st_canvas(
         fill_color="rgba(255, 255, 255, 0)",
-        stroke_width=3,
+        stroke_width=4,
         stroke_color="#000000",
         background_color="#FFFFFF",
-        height=200,
-        width=600,
+        height=280,
+        width=700,
         drawing_mode="freedraw",
         key=f"canvas_{training_id}_{dept}_{name}",
         display_toolbar=True,
     )
 
-    st.caption("💡 좌측 상단 🗑 전체 지우기 · ↶ 되돌리기")
+    st.caption(
+        "💡 좌측 상단 🗑 전체 지우기 · ↶ 되돌리기 · "
+        "모바일에서는 손가락으로, PC에서는 마우스/트랙패드로 서명해주세요."
+    )
 
     if st.button("✅ 서명 제출", type="primary", use_container_width=True):
         if canvas_result.image_data is None or is_canvas_empty(canvas_result.image_data):
